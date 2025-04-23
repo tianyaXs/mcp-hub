@@ -17,12 +17,13 @@ mcp = FastMCP("vehicle_command_server")
 
 def get_current_timestamp():
     return int(time.time())
+
 @mcp.tool()
 async def get_vehicle_agent(query: str):
     """
-    获取车控指令
-    :param query: 指令内容
-    :return: 协议信息
+    Get vehicle control command
+    :param query: Command content
+    :return: Protocol information
     """
     url = "http://192.168.2.18:8605/api/v1/chat/command_agent"
     headers = {
@@ -39,7 +40,7 @@ async def get_vehicle_agent(query: str):
         "type": "text",
         "content": query,
         "timestamp": timestamp,
-        "history": [],  # 假设没有历史记录
+        "history": [],  # Assuming no history
         "car_info": {
             "foreground_app": ""
         }
@@ -70,10 +71,11 @@ async def get_vehicle_agent(query: str):
         return {"error": str(e)}
  
 async def health_check(request):
-    """健康检查接口"""
+    """Health check endpoint"""
     return JSONResponse({"status": "healthy", "timestamp": int(time.time())}) 
+
 def create_starlette_app(mcp_server: Server, *, debug: bool = False):
-    """创建 Starlette 应用能通过sse提供mcp服务"""
+    """Create Starlette application that provides MCP service through SSE"""
     sse = SseServerTransport("/messages/")
     
     async def handle_sse(request):

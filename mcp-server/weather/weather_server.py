@@ -20,9 +20,9 @@ USER_AGENT = "weather-app/1.0"
  
 async def get_weather(city):
     """
-    从OpenWeather API 获取天气信息
-    :param city: 城市名称（需要试用英文，如 beijing）
-    :return: 天气数据字典；若发生错误，返回包含error信息的字典
+    Get weather information from OpenWeather API
+    :param city: City name (must be in English, e.g., 'beijing')
+    :return: Weather data dictionary; if error occurs, returns dictionary with error information
     """
     params = {
         "q": city,
@@ -38,18 +38,18 @@ async def get_weather(city):
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            return {"error": f"HTTP请求错误：{e}"}
+            return {"error": f"HTTP Request Error: {e}"}
         except Exception as e:
-            return {"error": f"发生错误：{e}"}
+            return {"error": f"An error occurred: {e}"}
  
 def format_weather_data(data):
     """
-    格式化天气数据
-    :param data: 天气数据字典
-    :return: 格式化后的字符串；若发生错误，返回包含error信息的字符串
+    Format weather data
+    :param data: Weather data dictionary
+    :return: Formatted string; if error occurs, returns string with error information
     """
  
-    #  如果传入的是字符串，则先转换成字典
+    # If input is a string, convert it to dictionary first
     if isinstance(data, str):
         data = json.loads(data)
  
@@ -62,7 +62,7 @@ def format_weather_data(data):
     humidity = data["main"]["humidity"]
     wind = data["wind"]["speed"]
  
-    return f"城市：{city}, {country}\n天气：{weather}\n温度：{temperature}°C\n湿度：{humidity}%\n风速：{wind}m/s"
+    return f"City: {city}, {country}\nWeather: {weather}\nTemperature: {temperature}°C\nHumidity: {humidity}%\nWind Speed: {wind}m/s"
  
 def get_current_timestamp():
     return int(time.time())
@@ -70,19 +70,20 @@ def get_current_timestamp():
 @mcp.tool()
 async def get_weather_tool(city: str):
     """
-    获取城市的天气信息
-    :param city: 城市名称（需要试用英文，如 beijing）
-    :return: 天气数据字典；若发生错误，返回包含error信息的字典
+    Get weather information for a city
+    :param city: City name (must be in English, e.g., 'beijing')
+    :return: Weather data dictionary; if error occurs, returns dictionary with error information
     """
     weather_data = await get_weather(city)
     return format_weather_data(weather_data)
  
  
 async def health_check(request):
-    """健康检查接口"""
+    """Health check endpoint"""
     return JSONResponse({"status": "healthy", "timestamp": int(time.time())}) 
+
 def create_starlette_app(mcp_server: Server, *, debug: bool = False):
-    """创建 Starlette 应用能通过sse提供mcp服务"""
+    """Create Starlette application that provides MCP service through SSE"""
     sse = SseServerTransport("/messages/")
     
     async def handle_sse(request):
@@ -105,8 +106,6 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False):
             Route("/sse/health", endpoint=health_check, methods=["GET"])
         ],
     )
- 
- 
  
 if __name__ == "__main__":
     mcp_server = mcp._mcp_server

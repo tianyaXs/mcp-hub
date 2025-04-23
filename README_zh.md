@@ -89,6 +89,7 @@ Bash
 uv run main
 
 ## 项目结构
+```
 mcp-client/
 ├── .venv/                   # Virtual environment directory
 ├── config.py                # Configuration loading logic
