@@ -1,0 +1,24 @@
+[project]
+name = "mcp-hub"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.12",
+    "mcp[cli]>=1.6.0",
+    "openai>=1.75.0",
+    "pandas>=2.2.3",
+    "pydantic>=2.11.3",
+    "python-dotenv>=1.1.0",
+    "requests>=2.32.3",
+    "toml>=0.10.2",
+    "tomli>=2.2.1",
+    "uvicorn>=0.34.2",
+    "zhipuai>=2.1.5.20250421",
+]
+
+[tool.zhipu]
+openai_api_key = "3b7b82927ac44f14bceb211a52f59031.NgHG9RWhAO6fecPb"
+model = "glm-4-plus"
+
