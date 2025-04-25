@@ -54,10 +54,12 @@
 
 需要配置以下部分：
 
-* **智谱 AI (ZhipuAI) 设置:**
-    * `[tool.zhipu]`
-        * `openai_api_key`: **必需**. 你的API Key。
-        * `model`: **可设置其他支持Tools的模型**. 要使用的模型名称 (例如, "glm-4", "glm-3-turbo")。
+* **大语言模型 (LLM) 设置:**
+    * `[tool.llm]`
+        * `provider`: 模型提供商 (例如 "zhipuai", "deepseek", "openai_compatible")。
+        * `api_key`: **必需**. 你的API Key。
+        * `model`: **必需**. 要使用的模型名称 (例如, "glm-4", "glm-3-turbo", "deepseek-chat")。
+        * `base_url`: **可选**. 自定义API终端点，对于"openai_compatible"提供商是必需的。
 
 * **时间设置 (可选):**
     * `[tool.timing]`
@@ -69,9 +71,25 @@
 **`pyproject.toml` 示例片段:**
 
 ```toml
-[tool.zhipu]
-openai_api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
+[tool.llm]
+provider = "zhipuai"
+api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
 model = "glm-4-plus"
+#base_url = "https://api.zhipuai.com/v1"
+
+# DeepSeek配置示例
+# [tool.llm]
+# provider = "deepseek"
+# api_key = "your-deepseek-api-key"
+# model = "deepseek-chat"
+# base_url = "https://api.deepseek.com/v1"  # 可选
+
+# 自定义OpenAI兼容API示例
+# [tool.llm]
+# provider = "openai_compatible"
+# api_key = "your-api-key"
+# model = "model-name"
+# base_url = "https://your-api-endpoint.com/v1"  # 必需
 
 [tool.timing]
 # 可选：自定义时间参数 (单位：秒)

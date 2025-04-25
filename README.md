@@ -56,10 +56,12 @@ Configuration is primarily done in the `pyproject.toml` file located in the proj
 
 The following sections need to be configured:
 
-* **ZhipuAI Settings:**
-    * `[tool.zhipu]`
-        * `openai_api_key`: **Required**. Your API Key.
-        * `model`: **(Can be set to other models supporting Tools)**. The model name to use (e.g., "glm-4", "glm-3-turbo").
+* **Language Model (LLM) Settings:**
+    * `[tool.llm]`
+        * `provider`: The model provider (e.g., "zhipuai", "deepseek", "openai_compatible").
+        * `api_key`: **Required**. Your API Key.
+        * `model`: **Required**. The model name to use (e.g., "glm-4", "glm-3-turbo", "deepseek-chat").
+        * `base_url`: **Optional**. Custom API endpoint, required for "openai_compatible" provider.
 
 * **Timing Settings (Optional):**
     * `[tool.timing]`
@@ -71,11 +73,25 @@ The following sections need to be configured:
 **`pyproject.toml` Example Snippet:**
 
 ```toml
-[tool.zhipu]
-# Required: Replace with your actual ZhipuAI API Key
-openai_api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
-# Required: Specify the model
+[tool.llm]
+provider = "zhipuai"
+api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
 model = "glm-4-plus"
+base_url = "https://api.zhipuai.com/v1"
+
+# DeepSeek configuration example
+# [tool.llm]
+# provider = "deepseek"
+# api_key = "your-deepseek-api-key"
+# model = "deepseek-chat"
+# base_url = "https://api.deepseek.com/v1"  # optional
+
+# Custom OpenAI compatible API example
+# [tool.llm]
+# provider = "openai_compatible"
+# api_key = "your-api-key"
+# model = "model-name"
+# base_url = "https://your-api-endpoint.com/v1"  # required
 
 [tool.timing]
 # Optional: Customize timing parameters (unit: seconds)
