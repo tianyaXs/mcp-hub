@@ -1,0 +1,112 @@
+services:
+  mcp_services:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "cd /app && 
+      . /app/.venv/bin/activate && 
+      python /app/mcp-server/vehicle_command/command_server.py & 
+      python /app/mcp-server/weather/weather_server.py"
+    restart: unless-stopped
+    ports:
+      - "18100:18100"  # Main port for vehicle control service
+      - "18101:18101"  # Auxiliary port for vehicle control service
+      - "18150:18150"  # Main port for weather service
+      - "18151:18151"  # Auxiliary port for weather service
+    volumes:
+      - ./logs:/var/log
+    networks:
+      - mcp_network
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "command_server|weather_server"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    environment:
+      - PYTHONUNBUFFERED=1  # Ensure Python output is not buffered
+      - PYTHONPATH=/app     # Set Python module search path
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  mcp_client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "cd /app && 
+      . /app/.venv/bin/activate && 
+      python /app/mcp-client/main.py"
+    restart: unless-stopped
+    ports:
+      - "18200:18200"  # API service port
+    volumes:
+      - ./logs:/var/log
+    depends_on:
+      mcp_services:
+        condition: service_healthy
+    networks:
+      - mcp_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    environment:
+      - MCP_SERVICES_URL=http://mcp_services:18100  # Updated vehicle control service port
+      - MCP_WEATHER_URL=http://mcp_services:18150   # Updated weather service port
+      - PYTHONUNBUFFERED=1  # Ensure Python output is not buffered
+      - PYTHONPATH=/app     # Set Python module search path
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  web_demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "cd /app && 
+      . /app/.venv/bin/activate && 
+      python /app/mcp-client/demo/web_demo.py"
+    restart: unless-stopped
+    ports:
+      - "18300:18300"  # Web demo interface port
+    volumes:
+      - ./logs:/var/log
+    depends_on:
+      mcp_client:
+        condition: service_healthy
+    networks:
+      - mcp_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18300"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    environment:
+      - MCP_CLIENT_URL=http://mcp_client:18200  # Updated API service port
+      - PYTHONUNBUFFERED=1  # Ensure Python output is not buffered
+      - PYTHONPATH=/app     # Set Python module search path
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+networks:
+  mcp_network:
+    driver: bridge
+    name: mcp_network
+
+volumes:
+  logs:
+    name: mcp_logs 

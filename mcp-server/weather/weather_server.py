@@ -112,7 +112,7 @@ if __name__ == "__main__":
  
     parser = argparse.ArgumentParser(description='Run MCP SSE-based server')
     parser.add_argument("--host", default="0.0.0.0", help="MCP server host")
-    parser.add_argument("--port", default=18081, type=int, help="MCP server port")
+    parser.add_argument("--port", default=18150, type=int, help="MCP server port")
     args = parser.parse_args()
  
     starlette_app = create_starlette_app(mcp_server, debug=True)

@@ -142,8 +142,8 @@ async def main():
     #     sys.exit(1)
     client = MCPClient()
     try:
-        await client.connect_to_server("http://localhost:18081/sse")
-        await client.connect_to_server("http://localhost:18080/sse")
+        await client.connect_to_server("http://localhost:18150/sse")
+        await client.connect_to_server("http://localhost:18100/sse")
         await client.chat_loop()
     finally:
         await client.cleanup()

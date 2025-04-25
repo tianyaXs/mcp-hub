@@ -160,4 +160,4 @@ if __name__ == "__main__":
 
     logger.info("Starting Uvicorn server...")
     # Run the FastAPI app instance directly
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=log_config)
+    uvicorn.run(app, host="0.0.0.0", port=18200, log_config=log_config)

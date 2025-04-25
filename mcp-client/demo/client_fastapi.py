@@ -109,8 +109,8 @@ class MCPClient:
 async def lifespan(app: FastAPI):
     # 启动时初始化客户端
     app.state.client = MCPClient()
-    await app.state.client.connect_to_server("http://localhost:18081/sse")
-    await app.state.client.connect_to_server("http://localhost:18080/sse")
+    await app.state.client.connect_to_server("http://localhost:18150/sse")
+    await app.state.client.connect_to_server("http://localhost:18100/sse")
     yield
     # 关闭时清理资源
     await app.state.client.cleanup()

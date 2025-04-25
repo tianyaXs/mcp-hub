@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 async def query_mcp_service(query_text):
     """向MCP客户端发送查询请求并获取响应"""
-    url = "http://127.0.0.1:8000/query"
+    url = "http://mcp_client:18200/query"  # 使用服务名和正确的端口
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -40,7 +40,7 @@ def process_query(query, history):
 
 async def check_service_health():
     """检查MCP服务的健康状态"""
-    url = "http://127.0.0.1:8000/health"
+    url = "http://mcp_client:18200/health"  # 使用服务名和正确的端口
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=5)
@@ -78,8 +78,8 @@ def check_services():
 async def register_mcp_services():
     """注册MCP服务到客户端"""
     services = [
-        "http://localhost:18080/sse",  # vehicle_command服务
-        "http://localhost:18081/sse"   # weather服务
+        "http://mcp_services:18100/sse",  # vehicle_command服务
+        "http://mcp_services:18150/sse"   # weather服务
     ]
     
     results = []
@@ -88,7 +88,7 @@ async def register_mcp_services():
             async with httpx.AsyncClient() as client:
                 print(f"正在注册服务: {service_url}")
                 response = await client.post(
-                    "http://127.0.0.1:8000/register",
+                    "http://mcp_client:18200/register",
                     json={"url": service_url},
                     timeout=10
                 )
@@ -187,9 +187,9 @@ with gr.Blocks(title="MCP服务演示", theme=gr.themes.Soft()) as demo:
 if __name__ == "__main__":
     print("===== MCP服务网页演示 =====")
     print("确保已启动:")
-    print("   - vehicle_command服务 (端口18080)")
-    print("   - weather服务 (端口18081)")
-    print("   - FastAPI客户端服务 (端口8000)")
+    print("   - vehicle_command服务 (端口18100)")
+    print("   - weather服务 (端口18150)")
+    print("   - FastAPI客户端服务 (端口18200)")
     
     # 启动Gradio界面
-    demo.launch(share=False, server_name="0.0.0.0", server_port=7860)
+    demo.launch(share=False, server_name="0.0.0.0", server_port=18300)
