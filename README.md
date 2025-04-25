@@ -4,6 +4,9 @@
 
 This project is a FastAPI-based application acting as a central client and orchestrator for multiple MCP (Meta Call Protocol) compliant tool servers. It connects to these tool servers via SSE (Server-Sent Events), aggregates their available tools, and leverages a large language model (LLM) to understand user queries and intelligently invoke the appropriate tools. It also includes health checks and an automatic reconnection mechanism to enhance system robustness.
 
+**Read this in other languages: [[English]](README.md)   [[中文]](README_zh.md)**
+
+
 ## Main Features
 
 * **MCP Client:** Connects to MCP-compliant tool servers via SSE.
