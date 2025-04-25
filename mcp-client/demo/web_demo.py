@@ -192,4 +192,4 @@ if __name__ == "__main__":
     print("   - FastAPI客户端服务 (端口8000)")
     
     # 启动Gradio界面
-    demo.launch(share=False, server_name="127.0.0.1", server_port=7860)
+    demo.launch(share=False, server_name="0.0.0.0", server_port=7860)

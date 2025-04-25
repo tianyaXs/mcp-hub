@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple, Set
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from zhipuai import ZhipuAI
 from registry import ServiceRegistry
+from llm_factory import create_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class MCPOrchestrator:
         self.registry = registry
         self.exit_stack = AsyncExitStack()
         self.http_client: Optional[httpx.AsyncClient] = None
-        self.llm_client: Optional[ZhipuAI] = None
+        self.llm_client = None
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.pending_reconnection: Set[str] = set()
         self.reconnection_task: Optional[asyncio.Task] = None
@@ -34,12 +34,15 @@ class MCPOrchestrator:
         self.http_timeout = int(self.config.get("http_timeout", 10))
 
         # Initialize LLM client
-        api_key = self.config.get("zhipu_api_key")
-        if api_key:
-            self.llm_client = ZhipuAI(api_key=api_key)
-            logger.info("ZhipuAI Client initialized.")
+        llm_config = self.config.get("llm_config")
+        if llm_config:
+            self.llm_client = create_llm_client(llm_config)
+            if self.llm_client:
+                logger.info(f"{llm_config.provider.capitalize()} Client initialized.")
+            else:
+                logger.warning("LLM Client initialization failed.")
         else:
-            logger.warning("LLM Client not initialized due to missing API key.")
+            logger.warning("LLM client configuration not found.")
 
     async def setup(self):
         """Initializes shared resources like the HTTP client."""
@@ -295,12 +298,16 @@ class MCPOrchestrator:
             {"role": "system", "content": "你是一个智能助手，能够利用可用工具来回答问题。"},
             {"role": "user", "content": query}
         ]
-        # Use configured model name
-        model_name = self.config.get("zhipu_model")
-        if not model_name: return "错误：语言模型名称未配置。"
-
+        
+        # Get configured model name
+        llm_config = self.config.get("llm_config")
+        if not llm_config or not llm_config.model:
+            return "错误：语言模型名称未配置。"
+            
+        model_name = llm_config.model
         available_tools = self.registry.get_all_tools()
-        logger.debug(f"Sending query to LLM '{model_name}'. Query: '{query[:50]}...'. Tools: {len(available_tools)}")
+        provider = llm_config.provider
+        logger.debug(f"Sending query to LLM ({provider}/{model_name}). Query: '{query[:50]}...'. Tools: {len(available_tools)}")
 
         try:
             # Ensure keyword arguments match the SDK's expectations
@@ -308,7 +315,7 @@ class MCPOrchestrator:
                 model=model_name,
                 messages=messages,
                 tools=available_tools if available_tools else None
-                # Verify other required parameters for your zhipuai version if needed
+                # Verify other required parameters for your specific provider if needed
             )
             choice = response.choices[0]
             message = choice.message
@@ -339,7 +346,7 @@ class MCPOrchestrator:
              return f"错误：调用语言模型时发生类型错误，请检查 SDK 参数。({e})"
         except Exception as e:
             logger.error(f"Error during LLM interaction or tool processing: {e}", exc_info=True)
-            return "错误：处理您的请求时发生意外错误。"
+            return f"错误：处理您的请求时发生意外错误。({type(e).__name__}: {e})"
 
 
     async def cleanup(self):
