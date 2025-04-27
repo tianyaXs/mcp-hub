@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "vehicle-control": {
+      "url": "http://127.0.0.1:18100/sse"
+    },
+    "weather-service": {
+      "url": "http://127.0.0.1:18150/sse"
+    },
+    "amap-amap-sse": {
+      "url": "https://mcp.amap.com/sse?key=da2c9c39f9edad643b9c53f506fb381c"
+    }
+  }
+}

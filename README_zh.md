@@ -108,6 +108,34 @@ Bash
 
 uv run main
 
+## Docker 部署
+
+项目可以使用 Docker Compose 部署，包含以下服务：
+
+1. `mcp_local_services`: 提供后端工具服务（车辆控制和天气）
+   - 端口: 18100-18101（车辆控制）, 18150-18151（天气）
+
+2. `mcp_client`: 主要的 MCP 编排服务
+   - 端口: 18200
+   - 依赖: mcp_local_services
+
+3. `web_demo`: 演示用的 Web 界面
+   - 端口: 18300
+   - 依赖: mcp_client
+
+使用 Docker 部署的命令：
+
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
+# 检查所有服务是否正常运行
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f
+```
+
 ## 项目结构
 ```
 mcp-client/

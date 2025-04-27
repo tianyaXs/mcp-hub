@@ -77,50 +77,77 @@ class MCPOrchestrator:
         self.heartbeat_task = None
         self.reconnection_task = None
 
-    async def connect_service(self, server_url: str) -> Tuple[bool, str]:
+    async def connect_service(self, server_url: str, service_name: str = "") -> Tuple[bool, str]:
         """使用超时和日志连接服务。"""
+        display_name = service_name or server_url
+        
         if not self.http_client:
-             logger.error("无法连接服务：HTTP 客户端未就绪。")
+             logger.error(f"无法连接服务 {display_name}：HTTP 客户端未就绪。")
              return False, "内部客户端错误：HTTP 客户端未就绪"
 
         if self.registry.get_session(server_url):
-            logger.warning(f"服务 {server_url} 已注册。将重新连接。")
+            logger.warning(f"服务 {display_name} ({server_url}) 已注册。将重新连接。")
             await self.disconnect_service(server_url) # 先断开
 
-        logger.info(f"[{server_url}] 尝试连接 MCP 服务器...")
+        logger.info(f"[{display_name}] 尝试连接 MCP 服务器 {server_url}...")
         session: Optional[ClientSession] = None
         try:
-            logger.debug(f"[{server_url}] 进入 SSE 客户端上下文...")
-            stream_context = await self.exit_stack.enter_async_context(sse_client(url=server_url))
-            read_stream, write_stream = stream_context
-            logger.debug(f"[{server_url}] SSE 流已获取。")
-            session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
-            logger.info(f"[{server_url}] 尝试初始化 MCP 会话 (超时={30}s)...")
+            # 添加连接重试逻辑
+            max_retries = 3
+            retry_count = 0
+            last_error = None
+            
+            while retry_count < max_retries:
+                try:
+                    logger.debug(f"[{display_name}] 进入 SSE 客户端上下文... (尝试 {retry_count + 1}/{max_retries})")
+                    stream_context = await self.exit_stack.enter_async_context(sse_client(url=server_url, timeout=30.0))
+                    read_stream, write_stream = stream_context
+                    logger.debug(f"[{display_name}] SSE 流已获取。")
+                    
+                    # 连接成功，跳出重试循环
+                    session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    last_error = e
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"[{display_name}] 连接失败 (尝试 {retry_count}/{max_retries}): {e}. 重试中...")
+                        await asyncio.sleep(1)  # 短暂等待后重试
+                    else:
+                        logger.error(f"[{display_name}] 连接失败，已达到最大重试次数: {e}")
+                        raise  # 重新抛出最后一个异常
+            
+            if not session:
+                # 如果所有重试都失败但没有触发异常，这是一个兜底检查
+                error_msg = f"无法建立连接，所有重试均失败" if last_error else "无法建立连接，未知原因"
+                raise ConnectionError(error_msg)
+                
+            logger.info(f"[{display_name}] 尝试初始化 MCP 会话 (超时={30}s)...")
             try:
                 await asyncio.wait_for(
                     session.initialize(),
                     timeout=30
                 )
-                logger.info(f"[{server_url}] MCP 会话初始化成功。")
+                logger.info(f"[{display_name}] MCP 会话初始化成功。")
             except asyncio.TimeoutError:
-                logger.error(f"[{server_url}] 在 session.initialize() 期间发生超时。")
+                logger.error(f"[{display_name}] 在 session.initialize() 期间发生超时。")
                 raise 
             except Exception as init_err:
-                logger.error(f"[{server_url}] 在 session.initialize() 期间发生错误: {init_err}", exc_info=True)
+                logger.error(f"[{display_name}] 在 session.initialize() 期间发生错误: {init_err}", exc_info=True)
                 raise 
 
-            logger.info(f"[{server_url}] 尝试列出工具 (超时={30}s)...")
+            logger.info(f"[{display_name}] 尝试列出工具 (超时={30}s)...")
             try:
                 tools_response = await asyncio.wait_for(
                     session.list_tools(),
                     timeout=30
                 )
-                logger.info(f"[{server_url}] 工具列出成功。")
+                logger.info(f"[{display_name}] 工具列出成功。")
             except asyncio.TimeoutError:
-                logger.error(f"[{server_url}] 在 session.list_tools() 期间发生超时。")
+                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生超时。")
                 raise
             except Exception as list_err:
-                logger.error(f"[{server_url}] 在 session.list_tools() 期间发生错误: {list_err}", exc_info=True)
+                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生错误: {list_err}", exc_info=True)
                 raise
 
             processed_tools = []
@@ -135,29 +162,36 @@ class MCPOrchestrator:
                 }
                 processed_tools.append((tool.name, tool_definition))
 
-            added_tool_names = self.registry.add_service(server_url, session, processed_tools)
-            try: setattr(session, 'url', server_url) # 尝试设置 URL 属性
-            except Exception: logger.warning(f"无法在会话对象上设置 'url' 属性 {server_url}")
+            added_tool_names = self.registry.add_service(server_url, session, processed_tools, service_name)
+            try: 
+                setattr(session, 'url', server_url) # 尝试设置 URL 属性
+                setattr(session, 'name', display_name) # 尝试设置名称属性
+            except Exception: 
+                logger.warning(f"无法在会话对象上设置属性 {display_name} ({server_url})")
 
             # 从待重连列表中移除
             self.pending_reconnection.discard(server_url)
-            logger.info(f"服务 {server_url} 成功连接/重连，已从待重连列表移除。")
+            logger.info(f"服务 {display_name} ({server_url}) 成功连接/重连，已从待重连列表移除。")
 
             final_message = f"连接成功。添加的工具: {', '.join(added_tool_names) if added_tool_names else '无'}"
-            logger.info(f"[{server_url}] {final_message}")
+            logger.info(f"[{display_name}] {final_message}")
             return True, final_message
 
         # --- 统一处理异常 ---
         except asyncio.TimeoutError:
-            logger.error(f"[{server_url}] 连接过程在 MCP 协议操作 (initialize/list_tools) 期间超时。")
-            return False, f"连接超时：与服务 {server_url} 的协议交互超时 ({30}秒)。请检查目标服务器响应性。"
+            logger.error(f"[{display_name}] 连接过程在 MCP 协议操作 (initialize/list_tools) 期间超时。")
+            return False, f"连接超时：与服务 {display_name} ({server_url}) 的协议交互超时 ({30}秒)。请检查目标服务器响应性。"
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as e:
+            logger.error(f"[{display_name}] 无法连接到服务: {e}", exc_info=True)
+            return False, f"无法连接到服务 {display_name} ({server_url}): {e}。请检查服务是否运行及网络连接。"
 
         except httpx.RequestError as e:
-            logger.error(f"[{server_url}] 初始 SSE 连接时网络错误: {e}", exc_info=True)
+            logger.error(f"[{display_name}] 初始 SSE 连接时网络错误: {e}", exc_info=True)
             return False, f"网络连接错误: {e}"
 
         except Exception as e:
-            logger.error(f"[{server_url}] 连接或设置失败: {e}", exc_info=True)
+            logger.error(f"[{display_name}] 连接或设置失败: {e}", exc_info=True)
             # (检查 502 等 HTTP 错误 - 逻辑同前)
             is_502_error = False; status_code = None; actual_error = e
             if hasattr(e, 'exceptions'):
@@ -167,10 +201,9 @@ class MCPOrchestrator:
                  status_code = actual_error.response.status_code
                  if status_code == 502: is_502_error = True
 
-            if is_502_error: return False, f"连接失败：目标服务返回 502 Bad Gateway。请检查目标服务 ('{server_url}') 是否健康。"
+            if is_502_error: return False, f"连接失败：目标服务返回 502 Bad Gateway。请检查目标服务 ('{display_name}') 是否健康。"
             elif status_code: return False, f"连接失败：目标服务返回 HTTP {status_code} 错误。"
             else: return False, f"服务初始化或设置失败 (类型: {type(e).__name__}): {e}"
-
 
     async def disconnect_service(self, server_url: str):
         """Removes service from registry. Resource cleanup relies on exit_stack."""

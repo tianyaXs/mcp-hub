@@ -1,5 +1,5 @@
 services:
-  mcp_services:
+  mcp_local_services:
     build: 
       context: .
       dockerfile: Dockerfile
@@ -16,6 +16,7 @@ services:
       - "18151:18151"  # Auxiliary port for weather service
     volumes:
       - ./logs:/var/log
+      - ./mcp-client/mcp.json:/app/mcp-client/mcp.json
     networks:
       - mcp_network
     healthcheck:
@@ -46,8 +47,9 @@ services:
       - "18200:18200"  # API service port
     volumes:
       - ./logs:/var/log
+      - ./mcp-client/mcp.json:/app/mcp-client/mcp.json
     depends_on:
-      mcp_services:
+      mcp_local_services:
         condition: service_healthy
     networks:
       - mcp_network
@@ -58,8 +60,6 @@ services:
       retries: 3
       start_period: 5s
     environment:
-      - MCP_SERVICES_URL=http://mcp_services:18100  # Updated vehicle control service port
-      - MCP_WEATHER_URL=http://mcp_services:18150   # Updated weather service port
       - PYTHONUNBUFFERED=1  # Ensure Python output is not buffered
       - PYTHONPATH=/app     # Set Python module search path
     deploy:
@@ -81,6 +81,7 @@ services:
       - "18300:18300"  # Web demo interface port
     volumes:
       - ./logs:/var/log
+      - ./mcp-client/mcp.json:/app/mcp-client/mcp.json
     depends_on:
       mcp_client:
         condition: service_healthy

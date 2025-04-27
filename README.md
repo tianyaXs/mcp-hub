@@ -161,3 +161,33 @@ mcp-client/
 ├── pyproject.toml           # Project configuration, dependencies (needs configuration)
 ├── requirements.txt         # (Optional) Dependency list file
 └── README.md                # This file
+
+```
+
+## Docker Deployment
+
+The project can be deployed using Docker Compose with the following services:
+
+1. `mcp_local_services`: Provides backend tool services (vehicle command and weather)
+   - Ports: 18100-18101 (vehicle control), 18150-18151 (weather)
+
+2. `mcp_client`: Main MCP orchestrator service
+   - Port: 18200
+   - Depends on: mcp_local_services
+
+3. `web_demo`: Web interface for demonstration
+   - Port: 18300
+   - Depends on: mcp_client
+
+To deploy using Docker:
+
+```bash
+# Build and start all services
+docker-compose up -d
+
+# Check if all services are running properly
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```

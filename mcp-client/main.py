@@ -63,6 +63,10 @@ class QueryRequest(BaseModel):
 class RegisterRequest(BaseModel):
      # Add URL validation using HttpUrl
      url: HttpUrl # Ensures URL is well-formed
+     name: str = "" # 服务名称，默认为空字符串
+     
+class ServiceInfoRequest(BaseModel):
+     url: str
 
 # --- API Endpoints ---
 @app.post("/query", response_model=Dict[str, Any]) # Added response model hint
@@ -97,22 +101,24 @@ async def register_service_endpoint(
 ):
     """Registers or re-registers an MCP tool server. Adds to retry on failure."""
     server_url_str = str(payload.url) # Convert HttpUrl back to string if needed by orchestrator
-    logger.info(f"收到注册请求，目标URL: {server_url_str}")
+    service_name = payload.name or server_url_str.split('/')[-2] # 如果没有提供名称，使用URL的一部分作为默认名称
+    
+    logger.info(f"收到注册请求，目标URL: {server_url_str}，服务名称: {service_name}")
     try:
         # Pass string URL to orchestrator
-        success, message = await orchestrator.connect_service(server_url_str)
+        success, message = await orchestrator.connect_service(server_url_str, service_name)
         if success:
-            logger.info(f"服务 {server_url_str} 注册成功: {message}")
+            logger.info(f"服务 {service_name} ({server_url_str}) 注册成功: {message}")
             return {"status": "success", "message": message} # FastAPI automatically uses JSONResponse
         else:
-            logger.error(f"服务注册失败 {server_url_str}: {message}")
+            logger.error(f"服务 {service_name} ({server_url_str}) 注册失败: {message}")
             status_code = 500 # Default
             is_connection_issue = False
             if "502 Bad Gateway" in message: status_code = 502; is_connection_issue = True
             elif "连接失败" in message or "网络连接错误" in message: status_code = 502; is_connection_issue = True
 
             if is_connection_issue:
-                 logger.info(f"将服务 {server_url_str} 添加到自动重连列表。")
+                 logger.info(f"将服务 {service_name} ({server_url_str}) 添加到自动重连列表。")
                  orchestrator.pending_reconnection.add(server_url_str)
 
             raise HTTPException(status_code=status_code, detail=message)
@@ -143,6 +149,29 @@ async def get_health_status(
         "total_tools": registry.get_tool_count(),
         "pending_reconnection_count": len(orchestrator.pending_reconnection),
         "connected_services_details": service_statuses
+    }
+
+@app.get("/service_info", response_model=Dict[str, Any])
+async def get_service_info(
+    url: str,
+    registry: ServiceRegistry = Depends(get_registry),
+    orchestrator: MCPOrchestrator = Depends(get_orchestrator)
+):
+    """返回指定服务的详细信息，包括工具列表"""
+    logger.info(f"收到服务信息查询请求，目标URL: {url}")
+    
+    # 获取服务详情
+    service_details = registry.get_service_details(url)
+    
+    if not service_details:
+        raise HTTPException(status_code=404, detail=f"服务未找到: {url}")
+    
+    # 添加健康状态
+    is_healthy = orchestrator.is_service_healthy(url)
+    service_details["status"] = "healthy" if is_healthy else "unhealthy"
+    
+    return {
+        "service": service_details
     }
 
 # --- Main Execution ---

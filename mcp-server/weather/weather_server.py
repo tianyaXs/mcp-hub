@@ -1,17 +1,15 @@
 import argparse
 import json
- 
+import time
+
 import httpx
 import uvicorn
+from fastapi.responses import JSONResponse
 from mcp.server import FastMCP, Server
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
-import random
-import time
-import requests
-from fastapi.responses import JSONResponse
- 
+
 mcp = FastMCP("sse_WeatherServer")
  
 OPENWEATHER_API_KEY = "8def2ecbdf06314b8a80c7df53d8810e"
@@ -77,7 +75,16 @@ async def get_weather_tool(city: str):
     weather_data = await get_weather(city)
     return format_weather_data(weather_data)
  
- 
+
+@mcp.tool()
+async def demo_tool():
+    """
+    Demo tool
+    :return: Demo tool response
+    """
+    return "This is a demo tool."
+
+
 async def health_check(request):
     """Health check endpoint"""
     return JSONResponse({"status": "healthy", "timestamp": int(time.time())}) 
