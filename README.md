@@ -26,7 +26,6 @@ This project is a FastAPI-based application acting as a central client and orche
 1.  **Clone the Repository**
     ```bash
     git clone git@gitee.com:callisto_atuo/mcp-agents.git
-    cd mcp-agents
     ```
 
 2.  **Create Virtual Environment**

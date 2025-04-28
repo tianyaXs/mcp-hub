@@ -250,7 +250,7 @@ cli = [
 ]
 
 [[package]]
-name = "mcp-agents"
+name = "mcp-hub"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
