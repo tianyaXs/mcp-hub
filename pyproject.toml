@@ -18,7 +18,24 @@ dependencies = [
     "zhipuai>=2.1.5.20250421",
 ]
 
-[tool.zhipu]
-openai_api_key = "******"
-model = "******"
 
+#[tool.llm]
+## 支持的类型：zhipuai, deepseek, openai_compatible
+#provider = "zhipuai"
+#api_key = "******"
+#model = "glm-4-plus"
+#base_url = "https://api.zhipuai.com/v1"
+
+# 如果需要使用DeepSeek
+ [tool.llm]
+ provider = "deepseek"
+ api_key = "******"
+ model = "deepseek-chat"
+ base_url = "https://api.deepseek.com"
+
+## 如果需要使用自定义的OpenAI兼容API
+# [tool.llm]
+# provider = "openai_compatible"
+# api_key = "******"
+# model = "Deepseek-R1"
+# base_url = "http://**.**.**.**:8080/v1"

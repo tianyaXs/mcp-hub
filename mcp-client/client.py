@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple, Set
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from zhipuai import ZhipuAI
 from registry import ServiceRegistry
+from llm_factory import create_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class MCPOrchestrator:
         self.registry = registry
         self.exit_stack = AsyncExitStack()
         self.http_client: Optional[httpx.AsyncClient] = None
-        self.llm_client: Optional[ZhipuAI] = None
+        self.llm_client = None
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.pending_reconnection: Set[str] = set()
         self.reconnection_task: Optional[asyncio.Task] = None
@@ -34,12 +34,15 @@ class MCPOrchestrator:
         self.http_timeout = int(self.config.get("http_timeout", 10))
 
         # Initialize LLM client
-        api_key = self.config.get("zhipu_api_key")
-        if api_key:
-            self.llm_client = ZhipuAI(api_key=api_key)
-            logger.info("ZhipuAI Client initialized.")
+        llm_config = self.config.get("llm_config")
+        if llm_config:
+            self.llm_client = create_llm_client(llm_config)
+            if self.llm_client:
+                logger.info(f"{llm_config.provider.capitalize()} Client initialized.")
+            else:
+                logger.warning("LLM Client initialization failed.")
         else:
-            logger.warning("LLM Client not initialized due to missing API key.")
+            logger.warning("LLM client configuration not found.")
 
     async def setup(self):
         """Initializes shared resources like the HTTP client."""
@@ -74,50 +77,77 @@ class MCPOrchestrator:
         self.heartbeat_task = None
         self.reconnection_task = None
 
-    async def connect_service(self, server_url: str) -> Tuple[bool, str]:
+    async def connect_service(self, server_url: str, service_name: str = "") -> Tuple[bool, str]:
         """使用超时和日志连接服务。"""
+        display_name = service_name or server_url
+        
         if not self.http_client:
-             logger.error("无法连接服务：HTTP 客户端未就绪。")
+             logger.error(f"无法连接服务 {display_name}：HTTP 客户端未就绪。")
              return False, "内部客户端错误：HTTP 客户端未就绪"
 
         if self.registry.get_session(server_url):
-            logger.warning(f"服务 {server_url} 已注册。将重新连接。")
+            logger.warning(f"服务 {display_name} ({server_url}) 已注册。将重新连接。")
             await self.disconnect_service(server_url) # 先断开
 
-        logger.info(f"[{server_url}] 尝试连接 MCP 服务器...")
+        logger.info(f"[{display_name}] 尝试连接 MCP 服务器 {server_url}...")
         session: Optional[ClientSession] = None
         try:
-            logger.debug(f"[{server_url}] 进入 SSE 客户端上下文...")
-            stream_context = await self.exit_stack.enter_async_context(sse_client(url=server_url))
-            read_stream, write_stream = stream_context
-            logger.debug(f"[{server_url}] SSE 流已获取。")
-            session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
-            logger.info(f"[{server_url}] 尝试初始化 MCP 会话 (超时={30}s)...")
+            # 添加连接重试逻辑
+            max_retries = 3
+            retry_count = 0
+            last_error = None
+            
+            while retry_count < max_retries:
+                try:
+                    logger.debug(f"[{display_name}] 进入 SSE 客户端上下文... (尝试 {retry_count + 1}/{max_retries})")
+                    stream_context = await self.exit_stack.enter_async_context(sse_client(url=server_url, timeout=30.0))
+                    read_stream, write_stream = stream_context
+                    logger.debug(f"[{display_name}] SSE 流已获取。")
+                    
+                    # 连接成功，跳出重试循环
+                    session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    last_error = e
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"[{display_name}] 连接失败 (尝试 {retry_count}/{max_retries}): {e}. 重试中...")
+                        await asyncio.sleep(1)  # 短暂等待后重试
+                    else:
+                        logger.error(f"[{display_name}] 连接失败，已达到最大重试次数: {e}")
+                        raise  # 重新抛出最后一个异常
+            
+            if not session:
+                # 如果所有重试都失败但没有触发异常，这是一个兜底检查
+                error_msg = f"无法建立连接，所有重试均失败" if last_error else "无法建立连接，未知原因"
+                raise ConnectionError(error_msg)
+                
+            logger.info(f"[{display_name}] 尝试初始化 MCP 会话 (超时={30}s)...")
             try:
                 await asyncio.wait_for(
                     session.initialize(),
                     timeout=30
                 )
-                logger.info(f"[{server_url}] MCP 会话初始化成功。")
+                logger.info(f"[{display_name}] MCP 会话初始化成功。")
             except asyncio.TimeoutError:
-                logger.error(f"[{server_url}] 在 session.initialize() 期间发生超时。")
+                logger.error(f"[{display_name}] 在 session.initialize() 期间发生超时。")
                 raise 
             except Exception as init_err:
-                logger.error(f"[{server_url}] 在 session.initialize() 期间发生错误: {init_err}", exc_info=True)
+                logger.error(f"[{display_name}] 在 session.initialize() 期间发生错误: {init_err}", exc_info=True)
                 raise 
 
-            logger.info(f"[{server_url}] 尝试列出工具 (超时={30}s)...")
+            logger.info(f"[{display_name}] 尝试列出工具 (超时={30}s)...")
             try:
                 tools_response = await asyncio.wait_for(
                     session.list_tools(),
                     timeout=30
                 )
-                logger.info(f"[{server_url}] 工具列出成功。")
+                logger.info(f"[{display_name}] 工具列出成功。")
             except asyncio.TimeoutError:
-                logger.error(f"[{server_url}] 在 session.list_tools() 期间发生超时。")
+                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生超时。")
                 raise
             except Exception as list_err:
-                logger.error(f"[{server_url}] 在 session.list_tools() 期间发生错误: {list_err}", exc_info=True)
+                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生错误: {list_err}", exc_info=True)
                 raise
 
             processed_tools = []
@@ -132,29 +162,36 @@ class MCPOrchestrator:
                 }
                 processed_tools.append((tool.name, tool_definition))
 
-            added_tool_names = self.registry.add_service(server_url, session, processed_tools)
-            try: setattr(session, 'url', server_url) # 尝试设置 URL 属性
-            except Exception: logger.warning(f"无法在会话对象上设置 'url' 属性 {server_url}")
+            added_tool_names = self.registry.add_service(server_url, session, processed_tools, service_name)
+            try: 
+                setattr(session, 'url', server_url) # 尝试设置 URL 属性
+                setattr(session, 'name', display_name) # 尝试设置名称属性
+            except Exception: 
+                logger.warning(f"无法在会话对象上设置属性 {display_name} ({server_url})")
 
             # 从待重连列表中移除
             self.pending_reconnection.discard(server_url)
-            logger.info(f"服务 {server_url} 成功连接/重连，已从待重连列表移除。")
+            logger.info(f"服务 {display_name} ({server_url}) 成功连接/重连，已从待重连列表移除。")
 
             final_message = f"连接成功。添加的工具: {', '.join(added_tool_names) if added_tool_names else '无'}"
-            logger.info(f"[{server_url}] {final_message}")
+            logger.info(f"[{display_name}] {final_message}")
             return True, final_message
 
         # --- 统一处理异常 ---
         except asyncio.TimeoutError:
-            logger.error(f"[{server_url}] 连接过程在 MCP 协议操作 (initialize/list_tools) 期间超时。")
-            return False, f"连接超时：与服务 {server_url} 的协议交互超时 ({30}秒)。请检查目标服务器响应性。"
+            logger.error(f"[{display_name}] 连接过程在 MCP 协议操作 (initialize/list_tools) 期间超时。")
+            return False, f"连接超时：与服务 {display_name} ({server_url}) 的协议交互超时 ({30}秒)。请检查目标服务器响应性。"
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as e:
+            logger.error(f"[{display_name}] 无法连接到服务: {e}", exc_info=True)
+            return False, f"无法连接到服务 {display_name} ({server_url}): {e}。请检查服务是否运行及网络连接。"
 
         except httpx.RequestError as e:
-            logger.error(f"[{server_url}] 初始 SSE 连接时网络错误: {e}", exc_info=True)
+            logger.error(f"[{display_name}] 初始 SSE 连接时网络错误: {e}", exc_info=True)
             return False, f"网络连接错误: {e}"
 
         except Exception as e:
-            logger.error(f"[{server_url}] 连接或设置失败: {e}", exc_info=True)
+            logger.error(f"[{display_name}] 连接或设置失败: {e}", exc_info=True)
             # (检查 502 等 HTTP 错误 - 逻辑同前)
             is_502_error = False; status_code = None; actual_error = e
             if hasattr(e, 'exceptions'):
@@ -164,10 +201,9 @@ class MCPOrchestrator:
                  status_code = actual_error.response.status_code
                  if status_code == 502: is_502_error = True
 
-            if is_502_error: return False, f"连接失败：目标服务返回 502 Bad Gateway。请检查目标服务 ('{server_url}') 是否健康。"
+            if is_502_error: return False, f"连接失败：目标服务返回 502 Bad Gateway。请检查目标服务 ('{display_name}') 是否健康。"
             elif status_code: return False, f"连接失败：目标服务返回 HTTP {status_code} 错误。"
             else: return False, f"服务初始化或设置失败 (类型: {type(e).__name__}): {e}"
-
 
     async def disconnect_service(self, server_url: str):
         """Removes service from registry. Resource cleanup relies on exit_stack."""
@@ -295,12 +331,16 @@ class MCPOrchestrator:
             {"role": "system", "content": "你是一个智能助手，能够利用可用工具来回答问题。"},
             {"role": "user", "content": query}
         ]
-        # Use configured model name
-        model_name = self.config.get("zhipu_model")
-        if not model_name: return "错误：语言模型名称未配置。"
-
+        
+        # Get configured model name
+        llm_config = self.config.get("llm_config")
+        if not llm_config or not llm_config.model:
+            return "错误：语言模型名称未配置。"
+            
+        model_name = llm_config.model
         available_tools = self.registry.get_all_tools()
-        logger.debug(f"Sending query to LLM '{model_name}'. Query: '{query[:50]}...'. Tools: {len(available_tools)}")
+        provider = llm_config.provider
+        logger.debug(f"Sending query to LLM ({provider}/{model_name}). Query: '{query[:50]}...'. Tools: {len(available_tools)}")
 
         try:
             # Ensure keyword arguments match the SDK's expectations
@@ -308,7 +348,7 @@ class MCPOrchestrator:
                 model=model_name,
                 messages=messages,
                 tools=available_tools if available_tools else None
-                # Verify other required parameters for your zhipuai version if needed
+                # Verify other required parameters for your specific provider if needed
             )
             choice = response.choices[0]
             message = choice.message
@@ -339,7 +379,7 @@ class MCPOrchestrator:
              return f"错误：调用语言模型时发生类型错误，请检查 SDK 参数。({e})"
         except Exception as e:
             logger.error(f"Error during LLM interaction or tool processing: {e}", exc_info=True)
-            return "错误：处理您的请求时发生意外错误。"
+            return f"错误：处理您的请求时发生意外错误。({type(e).__name__}: {e})"
 
 
     async def cleanup(self):

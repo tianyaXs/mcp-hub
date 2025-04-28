@@ -1,17 +1,15 @@
 import argparse
 import json
- 
-import httpx
+import random
+import time
+
+import requests
 import uvicorn
+from fastapi.responses import JSONResponse
 from mcp.server import FastMCP, Server
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
-import random
-import time
-import requests
-from fastapi.responses import JSONResponse
- 
 
 mcp = FastMCP("vehicle_command_server")
 
@@ -95,7 +93,7 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False):
         routes=[
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
-            Route("/sse/health", endpoint=health_check, methods=["GET"])  # 新增健康检查路由
+            Route("/sse/health", endpoint=health_check, methods=["GET"])
         ],
     )
  
@@ -106,7 +104,7 @@ if __name__ == "__main__":
  
     parser = argparse.ArgumentParser(description='Run MCP SSE-based server')
     parser.add_argument("--host", default="0.0.0.0", help="MCP server host")
-    parser.add_argument("--port", default=18080, type=int, help="MCP server port")
+    parser.add_argument("--port", default=18100, type=int, help="MCP server port")
     args = parser.parse_args()
  
     starlette_app = create_starlette_app(mcp_server, debug=True)

@@ -4,6 +4,8 @@
 
 本项目是一个基于 FastAPI 的应用程序，作为多个兼容 MCP（Meta Call Protocol）的工具服务器的中心客户端和编排器。它通过 SSE (Server-Sent Events) 连接到这些工具服务器，聚合它们提供的工具，利用大型语言模型来理解用户查询并智能地调用合适的工具。它还包含健康检查和自动重连机制，以提高系统的健壮性。
 
+
+
 ## 主要功能
 
 * **MCP 客户端:** 通过 SSE 连接到兼容 MCP 的工具服务器。
@@ -54,10 +56,12 @@
 
 需要配置以下部分：
 
-* **智谱 AI (ZhipuAI) 设置:**
-    * `[tool.zhipu]`
-        * `openai_api_key`: **必需**. 你的API Key。
-        * `model`: **可设置其他支持Tools的模型**. 要使用的模型名称 (例如, "glm-4", "glm-3-turbo")。
+* **大语言模型 (LLM) 设置:**
+    * `[tool.llm]`
+        * `provider`: 模型提供商 (例如 "zhipuai", "deepseek", "openai_compatible")。
+        * `api_key`: **必需**. 你的API Key。
+        * `model`: **必需**. 要使用的模型名称 (例如, "glm-4", "glm-3-turbo", "deepseek-chat")。
+        * `base_url`: **可选**. 自定义API终端点，对于"openai_compatible"提供商是必需的。
 
 * **时间设置 (可选):**
     * `[tool.timing]`
@@ -69,9 +73,25 @@
 **`pyproject.toml` 示例片段:**
 
 ```toml
-[tool.zhipu]
-openai_api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
+[tool.llm]
+provider = "zhipuai"
+api_key = "3b7b82927ac44f14bceb211a52f59031.****************"
 model = "glm-4-plus"
+#base_url = "https://api.zhipuai.com/v1"
+
+# DeepSeek配置示例
+# [tool.llm]
+# provider = "deepseek"
+# api_key = "your-deepseek-api-key"
+# model = "deepseek-chat"
+# base_url = "https://api.deepseek.com/v1"  # 可选
+
+# 自定义OpenAI兼容API示例
+# [tool.llm]
+# provider = "openai_compatible"
+# api_key = "your-api-key"
+# model = "model-name"
+# base_url = "https://your-api-endpoint.com/v1"  # 必需
 
 [tool.timing]
 # 可选：自定义时间参数 (单位：秒)
@@ -87,6 +107,34 @@ model = "glm-4-plus"
 Bash
 
 uv run main
+
+## Docker 部署
+
+项目可以使用 Docker Compose 部署，包含以下服务：
+
+1. `mcp_local_services`: 提供后端工具服务（车辆控制和天气）
+   - 端口: 18100-18101（车辆控制）, 18150-18151（天气）
+
+2. `mcp_client`: 主要的 MCP 编排服务
+   - 端口: 18200
+   - 依赖: mcp_local_services
+
+3. `web_demo`: 演示用的 Web 界面
+   - 端口: 18300
+   - 依赖: mcp_client
+
+使用 Docker 部署的命令：
+
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
+# 检查所有服务是否正常运行
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f
+```
 
 ## 项目结构
 ```
