@@ -209,22 +209,27 @@ class CodeGenerationAgent:
         except Exception as e:
             logger.error(f"Error initializing {config.provider} client: {e}", exc_info=True)
             return None 
-    def read_python_file(self,file_path):
+    def read_python_file(self, file_path):
         """
         读取指定路径的 Python 文件内容。
-        :param file_path: Python 文件路径
+        :param file_path: Python 文件路径（支持相对路径）
         :return: 文件内容字符串
         """
+        # 获取当前模块文件所在目录
+        module_dir = os.path.dirname(__file__)
+        # 构造绝对路径
+        absolute_path = os.path.join(module_dir, file_path)
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
+            with open(absolute_path, 'r', encoding='utf-8') as file:
                 content = file.read()
             return content
         except FileNotFoundError:
-            print(f"Error: File '{file_path}' not found.")
+            print(f"Error: File '{absolute_path}' not found.")
             return None
         except Exception as e:
             print(f"Error reading file: {e}")
-            return None
+            return None    
 
 
     def convert_to_markdown(self,python_code):
@@ -297,34 +302,26 @@ def create_code_file(query: str, file_name: str):
     :param file_name: input file_name
     :return: saved_path: output saved_path
     """
-    try:
-        # Instantiate the agent
-        agent = CodeGenerationAgent()
-        
-        # Generate code
-        logger.info("Requesting code generation...")
-        generated_code = agent.generate_code(query)
-        
-        if generated_code:
-            # Save code to file
-            logger.info("Attempting to save generated code...")
-            full_path = os.path.join("./mcp-server/", file_name.replace(".py", ""))
-            saved_path = agent.save_code_to_file(generated_code, full_path, file_name)
-            if saved_path:
-                print(f"\n✅ Code generation successful!")
-                print(f"   Saved to: {saved_path}")
-                return saved_path
-            else:
-                print("\n❌ Code generation succeeded, but saving to file failed. Check logs.")
+    # Instantiate the agent
+    agent = CodeGenerationAgent()
+    
+    # Generate code
+    logger.info("Requesting code generation...")
+    generated_code = agent.generate_code(query)
+    
+    if generated_code:
+        # Save code to file
+        logger.info("Attempting to save generated code...")
+        full_path = os.path.join("./mcp-server/", file_name.replace(".py", ""))
+        saved_path = agent.save_code_to_file(generated_code, full_path, file_name)
+        if saved_path:
+            print(f"\n✅ Code generation successful!")
+            print(f"   Saved to: {saved_path}")
+            return saved_path
         else:
-            print("\n❌ Code generation failed. Check logs for details.")
-            
-    except ValueError as e:
-        # Catch API key error from constructor
-        print(f"\n❌ Configuration Error: {e}")
-    except Exception as e:
-        print(f"\n❌ An unexpected error occurred: {e}")
-        logger.error("Main execution failed.", exc_info=True)
+            return "\n❌ Code generation succeeded, but saving to file failed. Check logs."
+    else:
+        return "\n❌ Code generation failed. Check logs for details."        
 
 
 async def health_check(request):
