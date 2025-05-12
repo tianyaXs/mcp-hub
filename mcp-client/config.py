@@ -13,6 +13,10 @@ HEARTBEAT_TIMEOUT_SECONDS = 180 # Disconnect after 180 seconds of no response
 HTTP_TIMEOUT_SECONDS = 10 # Timeout for HTTP health checks
 RECONNECTION_INTERVAL_SECONDS = 60 # Try reconnecting every 60 seconds
 
+# --- ReAct Agent Configuration ---
+REACT_MAX_ITERATIONS = 25 # Maximum ReAct iterations
+REACT_ENABLE_TRACE = False # Whether to include execution trace in results
+
 @dataclass
 class LLMConfig:
     provider: str
@@ -56,6 +60,8 @@ def load_app_config(pyproject_file: Optional[str] = None) -> Dict[str, Any]:
         "heartbeat_timeout": HEARTBEAT_TIMEOUT_SECONDS,
         "http_timeout": HTTP_TIMEOUT_SECONDS,
         "reconnection_interval": RECONNECTION_INTERVAL_SECONDS,
+        "react_max_iterations": REACT_MAX_ITERATIONS,
+        "react_enable_trace": REACT_ENABLE_TRACE,
     }
 
     try:
@@ -73,6 +79,13 @@ def load_app_config(pyproject_file: Optional[str] = None) -> Dict[str, Any]:
         config_data["heartbeat_timeout"] = timing_config.get("heartbeat_timeout_seconds", config_data["heartbeat_timeout"])
         config_data["http_timeout"] = timing_config.get("http_timeout_seconds", config_data["http_timeout"])
         config_data["reconnection_interval"] = timing_config.get("reconnection_interval_seconds", config_data["reconnection_interval"])
+        
+        # Load ReAct settings if present in config
+        react_config = config.get("tool", {}).get("react", {})
+        if react_config:
+            config_data["react_max_iterations"] = react_config.get("max_iterations", config_data["react_max_iterations"])
+            config_data["react_enable_trace"] = react_config.get("enable_trace", config_data["react_enable_trace"])
+            logger.info(f"Loaded ReAct configuration: max_iterations={config_data['react_max_iterations']}, enable_trace={config_data['react_enable_trace']}")
 
         if not llm_config.api_key:
             logger.warning(f"{llm_config.provider.capitalize()} API key not found in configuration.")

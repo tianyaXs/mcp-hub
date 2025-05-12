@@ -11,6 +11,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from registry import ServiceRegistry
 from llm_factory import create_llm_client
+from react_agent import ReActAgent
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class MCPOrchestrator:
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.pending_reconnection: Set[str] = set()
         self.reconnection_task: Optional[asyncio.Task] = None
+        self.react_agent: Optional[ReActAgent] = None
 
         # Timing configuration from loaded config
         self.heartbeat_interval = timedelta(seconds=int(self.config.get("heartbeat_interval", 60)))
@@ -39,6 +41,10 @@ class MCPOrchestrator:
             self.llm_client = create_llm_client(llm_config)
             if self.llm_client:
                 logger.info(f"{llm_config.provider.capitalize()} Client initialized.")
+                # Initialize ReAct agent if LLM client is available
+                self.react_agent = ReActAgent(self.llm_client, self.registry, self.config)
+                self.react_agent.is_service_healthy = self.is_service_healthy
+                logger.info("ReAct Agent initialized.")
             else:
                 logger.warning("LLM Client initialization failed.")
         else:
@@ -78,121 +84,127 @@ class MCPOrchestrator:
         self.reconnection_task = None
 
     async def connect_service(self, server_url: str, service_name: str = "") -> Tuple[bool, str]:
-        """使用超时和日志连接服务。"""
+        """Connect to service with timeout and logging."""
         display_name = service_name or server_url
         
         if not self.http_client:
-             logger.error(f"无法连接服务 {display_name}：HTTP 客户端未就绪。")
-             return False, "内部客户端错误：HTTP 客户端未就绪"
+             logger.error(f"Cannot connect to service {display_name}: HTTP client not ready.")
+             return False, "Internal client error: HTTP client not ready"
 
         if self.registry.get_session(server_url):
-            logger.warning(f"服务 {display_name} ({server_url}) 已注册。将重新连接。")
-            await self.disconnect_service(server_url) # 先断开
+            logger.warning(f"Service {display_name} ({server_url}) already registered. Will reconnect.")
+            await self.disconnect_service(server_url) # Disconnect first
 
-        logger.info(f"[{display_name}] 尝试连接 MCP 服务器 {server_url}...")
+        logger.info(f"[{display_name}] Attempting to connect to MCP server {server_url}...")
         session: Optional[ClientSession] = None
         try:
-            # 添加连接重试逻辑
+            # Add connection retry logic
             max_retries = 3
             retry_count = 0
             last_error = None
             
             while retry_count < max_retries:
                 try:
-                    logger.debug(f"[{display_name}] 进入 SSE 客户端上下文... (尝试 {retry_count + 1}/{max_retries})")
+                    logger.debug(f"[{display_name}] Entering SSE client context... (attempt {retry_count + 1}/{max_retries})")
                     stream_context = await self.exit_stack.enter_async_context(sse_client(url=server_url, timeout=30.0))
                     read_stream, write_stream = stream_context
-                    logger.debug(f"[{display_name}] SSE 流已获取。")
+                    logger.debug(f"[{display_name}] SSE stream acquired.")
                     
-                    # 连接成功，跳出重试循环
+                    # Connection successful, break the retry loop
                     session = await self.exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
                     break
                 except (httpx.ConnectError, httpx.ConnectTimeout) as e:
                     last_error = e
                     retry_count += 1
                     if retry_count < max_retries:
-                        logger.warning(f"[{display_name}] 连接失败 (尝试 {retry_count}/{max_retries}): {e}. 重试中...")
-                        await asyncio.sleep(1)  # 短暂等待后重试
+                        logger.warning(f"[{display_name}] Connection failed (attempt {retry_count}/{max_retries}): {e}. Retrying...")
+                        await asyncio.sleep(1)  # Brief wait before retry
                     else:
-                        logger.error(f"[{display_name}] 连接失败，已达到最大重试次数: {e}")
-                        raise  # 重新抛出最后一个异常
+                        logger.error(f"[{display_name}] Connection failed, maximum retries reached: {e}")
+                        raise  # Re-raise the last exception
             
             if not session:
-                # 如果所有重试都失败但没有触发异常，这是一个兜底检查
-                error_msg = f"无法建立连接，所有重试均失败" if last_error else "无法建立连接，未知原因"
+                # If all retries failed but no exception triggered, this is a fallback check
+                error_msg = f"Could not establish connection, all retries failed" if last_error else "Could not establish connection, unknown reason"
                 raise ConnectionError(error_msg)
                 
-            logger.info(f"[{display_name}] 尝试初始化 MCP 会话 (超时={30}s)...")
+            logger.info(f"[{display_name}] Attempting to initialize MCP session (timeout={30}s)...")
             try:
                 await asyncio.wait_for(
                     session.initialize(),
                     timeout=30
                 )
-                logger.info(f"[{display_name}] MCP 会话初始化成功。")
+                logger.info(f"[{display_name}] MCP session initialized successfully.")
             except asyncio.TimeoutError:
-                logger.error(f"[{display_name}] 在 session.initialize() 期间发生超时。")
+                logger.error(f"[{display_name}] Timeout occurred during session.initialize().")
                 raise 
             except Exception as init_err:
-                logger.error(f"[{display_name}] 在 session.initialize() 期间发生错误: {init_err}", exc_info=True)
+                logger.error(f"[{display_name}] Error during session.initialize(): {init_err}", exc_info=True)
                 raise 
 
-            logger.info(f"[{display_name}] 尝试列出工具 (超时={30}s)...")
+            logger.info(f"[{display_name}] Attempting to list tools (timeout={30}s)...")
             try:
                 tools_response = await asyncio.wait_for(
                     session.list_tools(),
                     timeout=30
                 )
-                logger.info(f"[{display_name}] 工具列出成功。")
+                logger.info(f"[{display_name}] Tools listed successfully.")
             except asyncio.TimeoutError:
-                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生超时。")
+                logger.error(f"[{display_name}] Timeout occurred during session.list_tools().")
                 raise
             except Exception as list_err:
-                logger.error(f"[{display_name}] 在 session.list_tools() 期间发生错误: {list_err}", exc_info=True)
+                logger.error(f"[{display_name}] Error during session.list_tools(): {list_err}", exc_info=True)
                 raise
 
+            # If ReAct agent is available, use it to process tool definitions to enhance descriptions
             processed_tools = []
-            for tool in tools_response.tools:
-                parameters = tool.inputSchema or {}
-                if not isinstance(parameters, dict) or parameters.get("type") != "object":
-                     parameters = { "type": "object", "properties": parameters, "required": list(parameters.keys()) }
-                tool_definition = {
-                    "type": "function", "function": {
-                        "name": tool.name, "description": tool.description, "parameters": parameters
+            if self.react_agent:
+                processed_tools = self.react_agent.process_tool_definitions(tools_response)
+                logger.info(f"[{display_name}] Processed tool definitions using ReAct agent")
+            else:
+                # Use original processing logic
+                for tool in tools_response.tools:
+                    parameters = tool.inputSchema or {}
+                    if not isinstance(parameters, dict) or parameters.get("type") != "object":
+                         parameters = { "type": "object", "properties": parameters, "required": list(parameters.keys()) }
+                    tool_definition = {
+                        "type": "function", "function": {
+                            "name": tool.name, "description": tool.description, "parameters": parameters
+                        }
                     }
-                }
-                processed_tools.append((tool.name, tool_definition))
+                    processed_tools.append((tool.name, tool_definition))
 
             added_tool_names = self.registry.add_service(server_url, session, processed_tools, service_name)
             try: 
-                setattr(session, 'url', server_url) # 尝试设置 URL 属性
-                setattr(session, 'name', display_name) # 尝试设置名称属性
+                setattr(session, 'url', server_url) # Try to set URL attribute
+                setattr(session, 'name', display_name) # Try to set name attribute
             except Exception: 
-                logger.warning(f"无法在会话对象上设置属性 {display_name} ({server_url})")
+                logger.warning(f"Could not set attributes on session object {display_name} ({server_url})")
 
-            # 从待重连列表中移除
+            # Remove from pending reconnection list
             self.pending_reconnection.discard(server_url)
-            logger.info(f"服务 {display_name} ({server_url}) 成功连接/重连，已从待重连列表移除。")
+            logger.info(f"Service {display_name} ({server_url}) successfully connected/reconnected, removed from pending reconnection list.")
 
-            final_message = f"连接成功。添加的工具: {', '.join(added_tool_names) if added_tool_names else '无'}"
+            final_message = f"Connection successful. Added tools: {', '.join(added_tool_names) if added_tool_names else 'none'}"
             logger.info(f"[{display_name}] {final_message}")
             return True, final_message
 
-        # --- 统一处理异常 ---
+        # --- Unified exception handling ---
         except asyncio.TimeoutError:
-            logger.error(f"[{display_name}] 连接过程在 MCP 协议操作 (initialize/list_tools) 期间超时。")
-            return False, f"连接超时：与服务 {display_name} ({server_url}) 的协议交互超时 ({30}秒)。请检查目标服务器响应性。"
+            logger.error(f"[{display_name}] Connection process timed out during MCP protocol operations (initialize/list_tools).")
+            return False, f"Connection timeout: Protocol interaction with service {display_name} ({server_url}) timed out ({30} seconds). Please check target server responsiveness."
 
         except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as e:
-            logger.error(f"[{display_name}] 无法连接到服务: {e}", exc_info=True)
-            return False, f"无法连接到服务 {display_name} ({server_url}): {e}。请检查服务是否运行及网络连接。"
+            logger.error(f"[{display_name}] Could not connect to service: {e}", exc_info=True)
+            return False, f"Could not connect to service {display_name} ({server_url}): {e}. Please check if the service is running and network connectivity."
 
         except httpx.RequestError as e:
-            logger.error(f"[{display_name}] 初始 SSE 连接时网络错误: {e}", exc_info=True)
-            return False, f"网络连接错误: {e}"
+            logger.error(f"[{display_name}] Network error during initial SSE connection: {e}", exc_info=True)
+            return False, f"Network connection error: {e}"
 
         except Exception as e:
-            logger.error(f"[{display_name}] 连接或设置失败: {e}", exc_info=True)
-            # (检查 502 等 HTTP 错误 - 逻辑同前)
+            logger.error(f"[{display_name}] Connection or setup failed: {e}", exc_info=True)
+            # (Check for 502 and other HTTP errors - logic same as before)
             is_502_error = False; status_code = None; actual_error = e
             if hasattr(e, 'exceptions'):
                  for sub_exc in getattr(e, 'exceptions', []):
@@ -201,9 +213,9 @@ class MCPOrchestrator:
                  status_code = actual_error.response.status_code
                  if status_code == 502: is_502_error = True
 
-            if is_502_error: return False, f"连接失败：目标服务返回 502 Bad Gateway。请检查目标服务 ('{display_name}') 是否健康。"
-            elif status_code: return False, f"连接失败：目标服务返回 HTTP {status_code} 错误。"
-            else: return False, f"服务初始化或设置失败 (类型: {type(e).__name__}): {e}"
+            if is_502_error: return False, f"Connection failed: Target service returned 502 Bad Gateway. Please check if target service ('{display_name}') is healthy."
+            elif status_code: return False, f"Connection failed: Target service returned HTTP {status_code} error."
+            else: return False, f"Service initialization or setup failed (type: {type(e).__name__}): {e}"
 
     async def disconnect_service(self, server_url: str):
         """Removes service from registry. Resource cleanup relies on exit_stack."""
@@ -316,7 +328,7 @@ class MCPOrchestrator:
                  # Keep the URL in self.pending_reconnection for the next cycle
 
     # --- Other Methods ---
-    def is_service_healthy(self, server_url: str) -> bool:
+    async def is_service_healthy(self, server_url: str) -> bool:
          """Checks health based on registry data and timeout."""
          last_heartbeat = self.registry.get_last_heartbeat(server_url)
          if not last_heartbeat: return False
@@ -324,18 +336,18 @@ class MCPOrchestrator:
          return (datetime.now() - last_heartbeat) <= self.heartbeat_timeout
 
     async def process_query(self, query: str) -> Any:
-        """Processes a user query using LLM and registered tools."""
-        if not self.llm_client: return "错误：语言模型客户端未配置。"
+        """Process user query using standard method"""
+        if not self.llm_client: return "Error: Language model client not configured."
 
         messages = [
-            {"role": "system", "content": "你是一个智能助手，能够利用可用工具来回答问题。"},
+            {"role": "system", "content": "You are an intelligent assistant that can utilize available tools to answer questions."},
             {"role": "user", "content": query}
         ]
         
         # Get configured model name
         llm_config = self.config.get("llm_config")
         if not llm_config or not llm_config.model:
-            return "错误：语言模型名称未配置。"
+            return "Error: Language model name not configured."
             
         model_name = llm_config.model
         available_tools = self.registry.get_all_tools()
@@ -358,29 +370,91 @@ class MCPOrchestrator:
                 tool_call = message.tool_calls[0]; function_name = tool_call.function.name
                 logger.info(f"LLM requested tool call: '{function_name}'")
                 try: function_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError as e: logger.error(...); return f"错误：无法解析工具 '{function_name}' 的参数。"
+                except json.JSONDecodeError as e: logger.error(f"Error parsing tool arguments: {e}"); return f"Error: Unable to parse parameters for tool '{function_name}'."
                 target_session = self.registry.get_session_for_tool(function_name)
-                if not target_session: logger.error(...); return f"错误：找不到执行工具 '{function_name}' 的服务。"
+                if not target_session: logger.error(f"Tool service not found: {function_name}"); return f"Error: Could not find service to execute tool '{function_name}'."
                 session_url = getattr(target_session, 'url', 'unknown_url')
-                if not self.is_service_healthy(session_url): logger.warning(...); return f"错误：执行工具 '{function_name}' 所需的服务当前不可用。"
+                if not await self.is_service_healthy(session_url): logger.warning(f"Tool service unhealthy: {session_url}"); return f"Error: The service required to execute tool '{function_name}' is currently unavailable."
                 logger.info(f"Executing tool '{function_name}' via session {session_url}")
                 try:
                     result = await target_session.call_tool(function_name, function_args)
                     # (Process result...)
                     if result.content and isinstance(result.content, list) and hasattr(result.content[0], 'text'): return result.content[0].text
-                    else: logger.warning(...); return f"信息：工具 '{function_name}' 执行完毕，但结果格式非预期。"
-                except Exception as e: logger.error(...); return f"错误：调用工具 '{function_name}' 时发生内部错误。"
+                    else: logger.warning(f"Unexpected tool result format: {result}"); return f"Info: Tool '{function_name}' executed, but result format was unexpected."
+                except Exception as e: logger.error(f"Error calling tool: {e}", exc_info=True); return f"Error: An internal error occurred while calling tool '{function_name}'."
             # (Handle direct response - code omitted for brevity)
-            else: logger.info(...); return message.content.strip() if message.content else ""
+            else: logger.info("LLM provided direct response"); return message.content.strip() if message.content else ""
 
         except TypeError as e:
              # Catch the specific TypeError seen before
              logger.error(f"TypeError during LLM call: {e}. Check SDK arguments for model '{model_name}'.", exc_info=True)
-             return f"错误：调用语言模型时发生类型错误，请检查 SDK 参数。({e})"
+             return f"Error: Type error during language model call, please check SDK parameters. ({e})"
         except Exception as e:
             logger.error(f"Error during LLM interaction or tool processing: {e}", exc_info=True)
-            return f"错误：处理您的请求时发生意外错误。({type(e).__name__}: {e})"
+            return f"Error: An unexpected error occurred while processing your request. ({type(e).__name__}: {e})"
 
+    async def process_query_with_react(self, query: str) -> str:
+        """Process user query using ReAct agent, supporting multi-round tool calls"""
+        if not self.react_agent:
+            logger.warning("ReAct Agent not initialized. Falling back to standard query processing.")
+            return await self.process_query(query)
+        
+        logger.info(f"Processing query with ReAct agent: '{query[:50]}...'")
+        result, trace = await self.react_agent.process_query(query)
+        
+        # Optionally process trace for debugging
+        if trace and self.config.get("react_enable_trace", False):
+            trace_str = self.react_agent._format_execution_trace(trace)
+            logger.debug(f"ReAct execution trace:\n{trace_str}")
+            
+        return result
+
+    async def process_query_with_trace(self, query: str) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
+        """Process user query using ReAct agent and return execution trace"""
+        if not self.react_agent:
+            logger.warning("ReAct Agent not initialized. Falling back to standard query processing.")
+            result = await self.process_query(query)
+            return result, None
+        
+        logger.info(f"Processing query with ReAct agent (with trace): '{query[:50]}...'")
+        # Temporarily enable trace recording
+        original_trace_setting = self.react_agent.enable_trace
+        self.react_agent.enable_trace = True
+        
+        # Process query
+        result, trace = await self.react_agent.process_query(query)
+        
+        # Restore original setting
+        self.react_agent.enable_trace = original_trace_setting
+        
+        return result, trace
+
+    async def stream_process_query(self, query: str):
+        """
+        Process user query using ReAct agent's streaming capability
+        
+        Args:
+            query: User query string
+            
+        Returns:
+            Stream response generator, returning results immediately after each step completes
+        """
+        if not self.react_agent:
+            logger.warning("ReAct Agent not initialized. Cannot execute streaming query.")
+            yield {
+                "thinking_step": None,
+                "is_final": True,
+                "result": "Error: ReAct Agent not initialized, cannot execute streaming thought process."
+            }
+            return
+        
+        logger.info(f"Starting streaming query processing with ReAct agent: '{query[:50]}...'")
+        
+        # Use streaming processing method
+        async for response in self.react_agent.stream_process_query(query):
+            yield response
+        
+        logger.info(f"Streaming query processing complete: '{query[:50]}...'")
 
     async def cleanup(self):
         """Stops monitoring and cleans up resources."""

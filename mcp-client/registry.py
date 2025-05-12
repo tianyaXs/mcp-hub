@@ -23,7 +23,7 @@ class ServiceRegistry:
         self.sessions[url] = session
         self.service_health[url] = datetime.now() # Mark healthy on add
         
-        # 存储服务名称
+        # Store service name
         display_name = name or url
         self.service_names[url] = display_name
 
@@ -69,7 +69,7 @@ class ServiceRegistry:
         return self.sessions.get(url)
         
     def get_service_name(self, url: str) -> str:
-        """获取服务的显示名称"""
+        """Get the display name of a service"""
         return self.service_names.get(url, url)
 
     def get_session_for_tool(self, tool_name: str) -> Optional[ClientSession]:
@@ -79,19 +79,19 @@ class ServiceRegistry:
         return list(self.tool_cache.values())
 
     def get_tools_for_service(self, url: str) -> List[str]:
-        """获取指定服务提供的工具列表"""
+        """Get list of tools provided by the specified service"""
         session = self.sessions.get(url)
         display_name = self.service_names.get(url, url)
         logger.info(f"Getting tools for service: {display_name} ({url})")
         
         if not session:
             return []
-        # 找出所有属于该session的工具名称
+        # Find all tool names belonging to this session
         tools = [name for name, s in self.tool_to_session_map.items() if s == session]
         return tools
 
     def get_service_details(self, url: str) -> Dict[str, Any]:
-        """获取指定服务的详细信息"""
+        """Get detailed information for the specified service"""
         if url not in self.sessions:
             return {}
             
@@ -128,10 +128,12 @@ class ServiceRegistry:
          # Iterate through active sessions
          for url in self.get_all_service_urls():
              last_heartbeat = self.service_health.get(url)
+             tools = self.get_tools_for_service(url)  # Get tool list for this service
              details.append({
                  "url": url,
                  "name": self.get_service_name(url),
                  "last_heartbeat": str(last_heartbeat) if last_heartbeat else "N/A",
+                 "tools": tools  # Add tool list to return data
              })
          return details
 
