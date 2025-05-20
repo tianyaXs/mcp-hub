@@ -514,6 +514,74 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors(), "body": exc.body}
     )
 
+@app.get("/query_stream_token")
+async def query_stream_token(request: Request, query: Optional[str] = None):
+    """处理字符级流式查询请求，使用URL查询参数获取查询内容"""
+    # 日志记录
+    headers = dict(request.headers)
+    query_params = str(request.query_params)
+    logger.debug(f"GET /query_stream_token received request | Query params: {query_params}")
+    
+    async def event_generator():
+        try:
+            # 检查查询参数
+            if not query:
+                logger.warning(f"Received token streaming request but missing query parameter")
+                yield {
+                    "data": json.dumps({
+                        "token_chunk": None,
+                        "is_final": True,
+                        "result": "Error: Missing required query parameter"
+                    })
+                }
+                return
+                
+            logger.info(f"Received token streaming query: {query}")
+            
+            # 使用token流式处理
+            orchestrator = get_orchestrator()
+            async for response in orchestrator.stream_process_query_token(query):
+                yield {
+                    "data": json.dumps(response)
+                }
+                
+            logger.info(f"Token streaming query processing complete")
+        except Exception as e:
+            logger.error(f"Error processing token streaming query: {e}", exc_info=True)
+            yield {
+                "data": json.dumps({
+                    "token_chunk": None,
+                    "is_final": True,
+                    "result": f"Error processing token streaming query: {str(e)}"
+                })
+            }
+    
+    return EventSourceResponse(event_generator())
+
+@app.post("/query_stream_token")
+async def query_stream_token_post(request: QueryRequest):
+    """POST方法处理字符级流式查询请求"""
+    async def event_generator():
+        try:
+            logger.info(f"Received POST token streaming query: {request.query}")
+            
+            orchestrator = get_orchestrator()
+            async for response in orchestrator.stream_process_query_token(request.query):
+                yield {
+                    "data": json.dumps(response)
+                }
+                
+            logger.info(f"POST token streaming query processing complete")
+        except Exception as e:
+            logger.error(f"Error processing POST token streaming query: {e}", exc_info=True)
+            yield {
+                "data": json.dumps({
+                    "token_chunk": None,
+                    "is_final": True,
+                    "result": f"Error processing token streaming query: {str(e)}"
+                })
+            }
+    
 # --- Main Execution ---
 if __name__ == "__main__":
     # Setup Uvicorn logging (same as before)

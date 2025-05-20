@@ -7,6 +7,7 @@ import logging
 import uuid
 from typing import Dict, List, Any, Tuple, Optional, AsyncGenerator
 from datetime import datetime
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +251,7 @@ If the question is simple and doesn't require tools, answer directly. If tools a
                                 logger.info(f"Tool '{function_name}' returned result: {result}")
                                 # Parse tool return result
                                 if result.content and isinstance(result.content, list) and hasattr(result.content[0], 'text'):
-                                    tool_result = result.content[0].text
+                                    tool_result = result.content[0].text or "[No result]"
                                 else:
                                     tool_result = f"Info: Tool '{function_name}' executed, but result format was unexpected."
                                     logger.warning(f"Unexpected tool result format: {result}")
@@ -436,7 +437,7 @@ If the question is simple and doesn't require tools, answer directly. If tools a
                                 logger.info(f"Tool '{function_name}' returned result: {result}")
                                 # Parse tool return result
                                 if result.content and isinstance(result.content, list) and hasattr(result.content[0], 'text'):
-                                    tool_result = result.content[0].text
+                                    tool_result = result.content[0].text or "[No result]"
                                 else:
                                     tool_result = f"Info: Tool '{function_name}' executed, but result format was unexpected."
                                     logger.warning(f"Unexpected tool result format: {result}")
@@ -491,3 +492,302 @@ If the question is simple and doesn't require tools, answer directly. If tools a
         last_message = messages[-1].get("content", "") if messages else ""
         result = f"Processing your request exceeded the maximum iteration limit ({self.max_iterations}). " + last_message
         yield {"thinking_step": None, "is_final": True, "result": result} 
+
+    async def stream_process_query_token(self, query: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        使用ReAct模式处理查询，并逐个令牌流式返回结果
+        兼容异步和同步流式LLM响应
+        """
+        if not self.llm_client: 
+            yield {"token_chunk": None, "is_final": True, "result": "Error: Language model client not configured."}
+            return
+        
+        # 获取可用工具
+        available_tools = self.registry.get_all_tools()
+        
+        # 构建系统提示
+        system_prompt = self._create_react_system_prompt(available_tools)
+        system_prompt += "\n\nWhen thinking, surround your thoughts with <think></think> tags."
+        
+        # 初始消息历史
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
+        ]
+        
+        # ReAct循环
+        iterations = 0
+        final_answer = ""
+        thinking_buffer = ""
+        current_thinking_id = None
+        in_thinking_mode = False
+        
+        async def sync_to_async_iter(sync_iter):
+            loop = asyncio.get_event_loop()
+            it = iter(sync_iter)
+            while True:
+                try:
+                    chunk = await loop.run_in_executor(None, next, it)
+                except StopIteration:
+                    break
+                yield chunk
+        
+        while iterations < self.max_iterations:
+            iterations += 1
+            logger.info(f"Starting token streaming ReAct iteration #{iterations}, query: '{query[:50]}...'")
+            
+            try:
+                # 获取模型名
+                llm_config = self.config.get("llm_config")
+                if not llm_config or not llm_config.model:
+                    yield {"token_chunk": None, "is_final": True, "result": "Error: Language model name not configured."}
+                    return
+                    
+                model_name = llm_config.model
+                
+                # 创建流式LLM请求
+                stream = self.llm_client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    tools=available_tools if available_tools else None,
+                    stream=True  # 启用流式输出
+                )
+                
+                content_buffer = ""
+                current_message = {"role": "assistant", "content": ""}
+                tool_calls = []
+                is_function_calling = False
+                
+                # 判断stream是否为异步可迭代对象
+                if hasattr(stream, "__aiter__"):
+                    chunk_iter = stream
+                    is_async = True
+                else:
+                    chunk_iter = sync_to_async_iter(stream)
+                    is_async = False
+                
+                # 用统一的异步for循环处理token
+                async for chunk in chunk_iter:
+                    # 处理tokens
+                    delta = chunk.choices[0].delta
+                    
+                    # 检查是否有新的内容
+                    if hasattr(delta, "content") and delta.content is not None:
+                        token = delta.content
+                        if token is None:
+                            logger.warning("Received None token from LLM stream, skipping.")
+                            continue
+                        content_buffer += token or ""
+                        current_message["content"] += token or ""
+                        
+                        # 检查思考模式标记
+                        if "<think>" in (token or "") and not in_thinking_mode:
+                            in_thinking_mode = True
+                            current_thinking_id = f"think-{uuid.uuid4()}"
+                            # 发送思考开始标记
+                            yield {
+                                "thinking_step": {
+                                    "type": "thinking",
+                                    "id": current_thinking_id,
+                                    "content": "",
+                                    "status": "start"
+                                },
+                                "is_final": False
+                            }
+                            thinking_buffer = ""
+                            continue
+                        
+                        if "</think>" in (token or "") and in_thinking_mode:
+                            in_thinking_mode = False
+                            # 发送思考结束标记
+                            yield {
+                                "thinking_step": {
+                                    "type": "thinking",
+                                    "id": current_thinking_id,
+                                    "content": thinking_buffer,
+                                    "status": "complete"
+                                },
+                                "is_final": False
+                            }
+                            current_thinking_id = None
+                            continue
+                        
+                        # 记录思考内容
+                        if in_thinking_mode:
+                            clean_token = (token or "").replace("<think>", "").replace("</think>", "")
+                            thinking_buffer += clean_token or ""
+                            # 发送思考内容token
+                            yield {
+                                "token_chunk": {
+                                    "type": "thinking",
+                                    "content": clean_token or "",
+                                    "thinking_id": current_thinking_id
+                                },
+                                "is_final": False
+                            }
+                        else:
+                            # 发送普通回答token
+                            clean_token = (token or "").replace("<think>", "").replace("</think>", "")
+                            if clean_token:
+                                final_answer += clean_token or ""
+                                yield {
+                                    "token_chunk": {
+                                        "type": "content",
+                                        "content": clean_token or ""
+                                    },
+                                    "is_final": False
+                                }
+                    
+                    # 检查工具调用
+                    if hasattr(delta, "tool_calls") and delta.tool_calls:
+                        is_function_calling = True
+                        
+                        for tool_call_delta in delta.tool_calls:
+                            tool_call_id = tool_call_delta.index
+                            
+                            # 确保工具调用列表有足够空间
+                            while len(tool_calls) <= tool_call_id:
+                                tool_calls.append({
+                                    "id": str(uuid.uuid4()),
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""}
+                                })
+                            
+                            # 更新函数名
+                            if hasattr(tool_call_delta, "function") and hasattr(tool_call_delta.function, "name"):
+                                if tool_call_delta.function.name is not None:
+                                    tool_calls[tool_call_id]["function"]["name"] = tool_call_delta.function.name
+                                else:
+                                    logger.warning(f"Received None as tool_call function.name for tool_call_id={tool_call_id}, skipping assignment.")
+                            
+                            # 更新参数
+                            if hasattr(tool_call_delta, "function") and hasattr(tool_call_delta.function, "arguments"):
+                                tool_calls[tool_call_id]["function"]["arguments"] += tool_call_delta.function.arguments or ""
+                    
+                    # 检查是否完成
+                    if chunk.choices[0].finish_reason:
+                        break
+                
+                # 流完成，检查是否需要工具调用
+                # 过滤掉function.name为None的tool_call，避免400错误
+                valid_tool_calls = [tc for tc in tool_calls if tc["function"].get("name") is not None]
+                if is_function_calling and valid_tool_calls:
+                    # 更新消息历史添加工具调用
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": valid_tool_calls
+                    })
+                    
+                    # 处理所有工具调用
+                    for tool_call in valid_tool_calls:
+                        function_name = tool_call["function"]["name"]
+                        function_args_str = tool_call["function"]["arguments"]
+                        tool_call_id = tool_call["id"]
+                        
+                        # 发送工具调用开始标记
+                        tool_step_id = f"tool-{uuid.uuid4()}"
+                        
+                        try:
+                            # 解析参数
+                            function_args = json.loads(function_args_str)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON解析错误: {e}, 参数字符串: {function_args_str}")
+                            function_args = {}
+                        
+                        yield {
+                            "thinking_step": {
+                                "type": "tool_call",
+                                "tool": function_name,
+                                "id": tool_step_id,
+                                "params": function_args,
+                                "status": "start"
+                            },
+                            "is_final": False
+                        }
+                        
+                        # 执行工具调用 - 此处复用现有代码
+                        try:
+                            # 获取会话执行工具
+                            target_session = self.registry.get_session_for_tool(function_name)
+                            if not target_session: 
+                                tool_result = f"Error: Could not find service to execute tool '{function_name}'."
+                                logger.error(f"Tool service not found: '{function_name}'")
+                            else:
+                                # 检查服务健康状态
+                                session_url = getattr(target_session, 'url', 'unknown_url')
+                                if callable(getattr(self, 'is_service_healthy', None)):
+                                    is_healthy = await self.is_service_healthy(session_url)
+                                else:
+                                    # 默认假设健康
+                                    is_healthy = True
+                                    
+                                if not is_healthy:
+                                    tool_result = f"Error: The service required to execute tool '{function_name}' is currently unavailable."
+                                    logger.warning(f"Service unhealthy: '{session_url}'")
+                                else:
+                                    # 执行工具调用
+                                    logger.info(f"Executing tool '{function_name}', parameters: {function_args}")
+                                    result = await target_session.call_tool(function_name, function_args)
+                                    logger.info(f"Tool '{function_name}' returned result: {result}")
+                                    # 解析工具返回结果
+                                    if result.content and isinstance(result.content, list) and hasattr(result.content[0], 'text'):
+                                        tool_result = result.content[0].text or "[No result]"
+                                    else:
+                                        tool_result = f"Info: Tool '{function_name}' executed, but result format was unexpected."
+                                        logger.warning(f"Unexpected tool result format: {result}")
+                        except Exception as e:
+                            tool_result = f"Error: An internal error occurred while calling tool '{function_name}': {str(e)}"
+                            logger.error(f"Tool call error: {e}", exc_info=True)
+                        
+                        # 发送工具调用完成标记
+                        yield {
+                            "thinking_step": {
+                                "type": "tool_call",
+                                "tool": function_name,
+                                "id": tool_step_id,
+                                "params": function_args,
+                                "result": tool_result,
+                                "status": "complete"
+                            },
+                            "is_final": False
+                        }
+                        
+                        # 添加工具结果到消息历史
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": tool_result
+                        })
+                    
+                    # 继续下一次迭代
+                    continue
+                else:
+                    # 没有工具调用，更新历史记录
+                    messages.append(current_message)
+                    
+                    # 发送最终结果
+                    yield {
+                        "token_chunk": None,
+                        "is_final": True,
+                        "result": final_answer
+                    }
+                    return
+                
+            except Exception as e:
+                error_msg = f"Error during token streaming: {type(e).__name__}: {e}"
+                logger.error(error_msg, exc_info=True)
+                yield {
+                    "token_chunk": None,
+                    "is_final": True,
+                    "result": f"Error processing your request. ({error_msg})"
+                }
+                return
+        
+        # 达到最大迭代次数
+        logger.warning(f"Maximum ReAct iterations reached ({self.max_iterations})")
+        yield {
+            "token_chunk": None,
+            "is_final": True,
+            "result": final_answer or f"Processing exceeded maximum iteration limit ({self.max_iterations})."
+        } 

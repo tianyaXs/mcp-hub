@@ -132,4 +132,60 @@ export const sendQuery = async (
     }
     return { result: '发送查询请求失败' }
   }
+}
+
+/**
+ * 发送流式查询请求（token级别）
+ * @param query 用户查询内容
+ * @param onToken 实时接收token的回调函数
+ */
+export const sendQueryStreamToken = async (
+  query: string,
+  onToken: (data: { type: string; content: string; thinking_id?: string; tool?: string; params?: any; result?: string; status?: string }) => void
+): Promise<{ result: string }> => {
+  return new Promise((resolve, reject) => {
+    const queryParams = new URLSearchParams({ query }).toString()
+    const url = `${api.defaults.baseURL}/query_stream_token?${queryParams}`
+    const eventSource = new EventSource(url)
+    let finalResult = ''
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        // token_chunk流式内容
+        if (data.token_chunk) {
+          onToken({
+            type: data.token_chunk.type,
+            content: data.token_chunk.content,
+            thinking_id: data.token_chunk.thinking_id
+          })
+        }
+        // 思考步骤（如工具调用）
+        if (data.thinking_step) {
+          onToken({
+            type: data.thinking_step.type,
+            content: data.thinking_step.content || '',
+            thinking_id: data.thinking_step.id,
+            tool: data.thinking_step.tool,
+            params: data.thinking_step.params,
+            result: data.thinking_step.result,
+            status: data.thinking_step.status
+          })
+        }
+        // 最终结果
+        if (data.is_final && data.result) {
+          finalResult = data.result
+          eventSource.close()
+          resolve({ result: finalResult })
+        }
+      } catch (err) {
+        console.error('解析SSE消息时出错:', err)
+      }
+    }
+    eventSource.onerror = (err) => {
+      console.error('SSE连接错误:', err)
+      eventSource.close()
+      reject('思考过程连接中断')
+    }
+  })
 } 

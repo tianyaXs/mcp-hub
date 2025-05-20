@@ -2,8 +2,6 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { 
   checkHealth,
-  getServiceInfo,
-  registerService,
   getAllServices,
   removeService,
   removeServiceFromConfig
@@ -13,7 +11,7 @@ import {
   updateMCPConfig,
   registerMCPServices
 } from '@/api/config'
-import type { HealthResponse, ServiceDetail, MCPConfig, Service, ServiceHealth, RegisterRequest } from '@/types/api'
+import type { MCPConfig, Service, ServiceHealth } from '@/types/api'
 import { useBaseStore } from './base'
 
 export const useServiceStore = defineStore('services', () => {

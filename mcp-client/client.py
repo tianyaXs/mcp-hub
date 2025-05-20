@@ -203,7 +203,8 @@ class MCPOrchestrator:
             return False, f"Network connection error: {e}"
 
         except Exception as e:
-            logger.error(f"[{display_name}] Connection or setup failed: {e}", exc_info=True)
+            logger.error(f"[{display_name}] Connection or setup failed: {e}")
+            # logger.error(f"[{display_name}] Connection or setup failed: {e}", exc_info=True)
             # (Check for 502 and other HTTP errors - logic same as before)
             is_502_error = False; status_code = None; actual_error = e
             if hasattr(e, 'exceptions'):
@@ -455,6 +456,33 @@ class MCPOrchestrator:
             yield response
         
         logger.info(f"Streaming query processing complete: '{query[:50]}...'")
+
+    async def stream_process_query_token(self, query: str):
+        """
+        Process user query using ReAct agent's token streaming capability
+        
+        Args:
+            query: User query string
+            
+        Returns:
+            Stream response generator, returning results immediately after each token is generated
+        """
+        if not self.react_agent:
+            logger.warning("ReAct Agent not initialized. Cannot execute token streaming.")
+            yield {
+                "token_chunk": None,
+                "is_final": True,
+                "result": "Error: ReAct Agent not initialized, cannot execute token streaming."
+            }
+            return
+        
+        logger.info(f"Starting token streaming with ReAct agent: '{query[:50]}...'")
+        
+        # Use token streaming processing method
+        async for response in self.react_agent.stream_process_query_token(query):
+            yield response
+        
+        logger.info(f"Token streaming complete: '{query[:50]}...'")
 
     async def cleanup(self):
         """Stops monitoring and cleans up resources."""

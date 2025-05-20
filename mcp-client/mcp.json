@@ -1,13 +1,22 @@
 {
   "mcpServers": {
-    "vehicle-control": {
-      "url": "http://127.0.0.1:18100/sse"
+    "木卫四车控": {
+      "url": "http://192.168.2.18:18100/sse"
     },
-    "weather-service": {
-      "url": "http://127.0.0.1:18150/sse"
+    "天气MCP服务": {
+      "url": "http://192.168.2.18:18150/sse"
     },
-    "amap-amap-sse": {
-      "url": "https://mcp.amap.com/sse?key=da2c9c39f9edad643b9c53f506fb381c"
+    "RUN服务": {
+      "url": "http://192.168.2.18:18183/sse"
+    },
+    "撰写代码": {
+      "url": "http://192.168.2.18:12386/sse"
+    },
+    "笔记推荐": {
+      "url": "http://192.168.5.9:18153/sse"
+    },
+    "UV安装": {
+      "url": "http://192.168.2.18:18860/sse"
     }
   }
 }

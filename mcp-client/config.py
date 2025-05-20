@@ -14,7 +14,7 @@ HTTP_TIMEOUT_SECONDS = 10 # Timeout for HTTP health checks
 RECONNECTION_INTERVAL_SECONDS = 60 # Try reconnecting every 60 seconds
 
 # --- ReAct Agent Configuration ---
-REACT_MAX_ITERATIONS = 25 # Maximum ReAct iterations
+REACT_MAX_ITERATIONS = 5 # Maximum ReAct iterations
 REACT_ENABLE_TRACE = False # Whether to include execution trace in results
 
 @dataclass
